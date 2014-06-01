@@ -45,7 +45,7 @@ public class NotificationProgressListener implements ProgressListener {
 
     @Override
     public void pictureTaken(int current, int max) {
-        final int percent = Math.round(current / (float)max);
+        final int percent = Math.round((current / (float)max) * 100);
         builder.setContentText("Timelapse in progress: " + percent + "%");
         builder.setProgress(max, current, false);
         manager.notify(id, builder.build());
