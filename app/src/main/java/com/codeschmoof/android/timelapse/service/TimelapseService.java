@@ -17,7 +17,6 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.sql.Time;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Timer;
@@ -53,7 +52,7 @@ public class TimelapseService extends Service {
 
     public static final String ACTION_STOP_TIMELAPSE = "com.codeschmoof.android.timelapse.action.STOP_TIMELAPSE";
 
-    private final TimelapseServiceBinder binder = new TimelapseServiceBinder();
+    private final LocalBinder binder = new LocalBinder();
     private final SimpleSsdpClient ssdpClient = new SimpleSsdpClient();
     private final List<ServerDevice> devices = new ArrayList<ServerDevice>();
     private ExecutorService executor = null;
@@ -253,6 +252,8 @@ public class TimelapseService extends Service {
             e.printStackTrace();
         }
         try {
+            JSONObject res = currentApi.setFocusMode("MF");
+            Log.d(TAG, "shoot mode: " + res.toString());
             final JSONObject apis = currentApi.getAvailableApiList();
             Log.d(TAG, "APIs: " + apis.toString());
         } catch (IOException e) {
@@ -289,7 +290,7 @@ public class TimelapseService extends Service {
     }
 
     private void handleActionUpdateTimelapse(long period) {
-        if (currentApi == null) {
+        if (currentApi == null || timer == null) {
             return;
         }
 
@@ -356,8 +357,8 @@ public class TimelapseService extends Service {
         return ret;
     }
 
-    private class TimelapseServiceBinder extends Binder {
-        TimelapseService getService() {
+    public class LocalBinder extends Binder {
+        public TimelapseService getService() {
             return TimelapseService.this;
         }
     }

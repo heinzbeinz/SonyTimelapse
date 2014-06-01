@@ -11,4 +11,5 @@
     <string name="button_start_timelapse">Start Timelapse</string>
     <string name="button_stop_timelapse">Stop Timelapse</string>
     <string name="label_timelapse_value">Timeout:</string>
+    <string name="label_timelapse_repeats">Repeats:</string>
 </resources>

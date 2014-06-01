@@ -1,6 +1,11 @@
 package com.codeschmoof.android.timelapse.app;
 
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.ServiceConnection;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.support.v7.app.ActionBarActivity;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -11,6 +16,9 @@ import android.widget.TextView;
 
 import com.codeschmoof.android.timelapse.R;
 import com.codeschmoof.android.timelapse.service.TimelapseService;
+import com.codeschmoof.android.timelapse.util.TimeSpan;
+
+import java.util.concurrent.TimeUnit;
 
 
 public class TimelapseActivity extends ActionBarActivity {
@@ -23,7 +31,28 @@ public class TimelapseActivity extends ActionBarActivity {
         }
     }
 
+    private LocalServiceConnection connection = new LocalServiceConnection();
+    private volatile TimelapseService service = null;
     private Mode currentMode = Mode.START_TIMELAPSE;
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+
+        // Bind to LocalService
+        final Intent intent = new Intent(this, TimelapseService.class);
+        bindService(intent, connection, Context.BIND_AUTO_CREATE);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+
+        if (service != null) {
+            unbindService(connection);
+            service = null;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,7 +82,26 @@ public class TimelapseActivity extends ActionBarActivity {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                TimelapseService.startActionUpdateTimelapse(TimelapseActivity.this, seekBar.getProgress());
+                if (currentMode == Mode.STOP_TIMELAPSE) {
+                    TimelapseService.startActionUpdateTimelapse(TimelapseActivity.this, seekBar.getProgress());
+                }
+                updateTimelapseText();
+            }
+        });
+
+        getRepeatsSeekBar().setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int i, boolean b) {
+
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
                 updateTimelapseText();
             }
         });
@@ -96,8 +144,11 @@ public class TimelapseActivity extends ActionBarActivity {
     }
 
     private void updateTimelapseText() {
-        final int progress = getTimelapseSeekBar().getProgress();
-        getTimelapseTextView().setText(progress + " s");
+        final int period = getTimelapseSeekBar().getProgress();
+        final int repeats = getRepeatsSeekBar().getProgress();
+        final TimeSpan timeLeft = TimeSpan.of(period * repeats, TimeUnit.SECONDS);
+        final String text = String.format("%d s * %d = %s left", period, repeats, timeLeft.toString());
+        getTimelapseTextView().setText(text);
     }
 
     private void updateTimelapseButton() {
@@ -130,10 +181,28 @@ public class TimelapseActivity extends ActionBarActivity {
     }
 
     private TextView getTimelapseTextView() {
-        return (TextView) findViewById(R.id.textview_timelapseSeconds);
+        return (TextView) findViewById(R.id.label_timeleft);
     }
 
     private SeekBar getTimelapseSeekBar() {
         return (SeekBar) findViewById(R.id.seekBar_timelapse);
+    }
+
+    private SeekBar getRepeatsSeekBar() {
+        return (SeekBar) findViewById(R.id.seekBar_repeats);
+    }
+
+    private class LocalServiceConnection implements ServiceConnection {
+
+        @Override
+        public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
+            final TimelapseService.LocalBinder binder = (TimelapseService.LocalBinder) iBinder;
+            service = binder.getService();
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName componentName) {
+            service = null;
+        }
     }
 }

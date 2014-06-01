@@ -279,6 +279,147 @@ public class SimpleRemoteApi {
     }
 
     /**
+     * Calls getShootMode API to the target server. Request JSON data is such
+     * like as below.
+     *
+     * <pre>
+     * {
+     *   "method": "getFocusMode",
+     *   "params": [],
+     *   "id": 1,
+     *   "version": "1.0"
+     * }
+     * </pre>
+     *
+     * @return JSON data of response
+     */
+    public JSONObject getFocusMode() throws IOException {
+        String service = "camera";
+        try {
+            JSONObject requestJson = new JSONObject()
+                    .put("method", "getFocusMode")
+                    .put("params", new JSONArray())
+                    .put("id", id())
+                    .put("version", "1.0");
+            String url = findActionListUrl(service) + "/" + service;
+
+            log("Request:  " + requestJson.toString());
+            String responseJson = SimpleHttpClient.httpPost(url,
+                    requestJson.toString());
+            log("Response: " + responseJson);
+            return new JSONObject(responseJson);
+        } catch (JSONException e) {
+            throw new IOException(e);
+        }
+    }
+
+    /**
+     * Calls setShootMode API to the target server. Request JSON data is such
+     * like as below.
+     *
+     * <pre>
+     * {
+     *   "method": "setFocusMode",
+     *   "params": ["MF"],
+     *   "id": 2,
+     *   "version": "1.0"
+     * }
+     * </pre>
+     *
+     * @param shootMode shoot mode (ex. "still")
+     * @return JSON data of response
+     */
+    public JSONObject setFocusMode(String shootMode) throws IOException {
+        String service = "camera";
+        try {
+            JSONObject requestJson = new JSONObject()
+                    .put("method", "setFocusMode")
+                    .put("params", new JSONArray().put(shootMode))
+                    .put("id", id())
+                    .put("version", "1.0");
+            String url = findActionListUrl(service) + "/" + service;
+
+            log("Request:  " + requestJson.toString());
+            String responseJson = SimpleHttpClient.httpPost(url,
+                    requestJson.toString());
+            log("Response: " + responseJson);
+            return new JSONObject(responseJson);
+        } catch (JSONException e) {
+            throw new IOException(e);
+        }
+    }
+
+    /**
+     * Calls getAvailableShootMode API to the target server. Request JSON data
+     * is such like as below.
+     *
+     * <pre>
+     * {
+     *   "method": "getAvailableFocusMode",
+     *   "params": [],
+     *   "id": 2,
+     *   "version": "1.0"
+     * }
+     * </pre>
+     *
+     * @return JSON data of response
+     */
+    public JSONObject getAvailableFocusMode() throws IOException {
+        String service = "camera";
+        try {
+            JSONObject requestJson = new JSONObject()
+                    .put("method", "getAvailableFocusMode")
+                    .put("params", new JSONArray())
+                    .put("id", id())
+                    .put("version", "1.0");
+            String url = findActionListUrl(service) + "/" + service;
+
+            log("Request:  " + requestJson.toString());
+            String responseJson = SimpleHttpClient.httpPost(url,
+                    requestJson.toString());
+            log("Response: " + responseJson);
+            return new JSONObject(responseJson);
+        } catch (JSONException e) {
+            throw new IOException(e);
+        }
+    }
+
+    /**
+     * Calls getSupportedShootMode API to the target server. Request JSON data
+     * is such like as below.
+     *
+     * <pre>
+     * {
+     *   "method": "getSupportedFocusMode",
+     *   "params": [],
+     *   "id": 2,
+     *   "version": "1.0"
+     * }
+     * </pre>
+     *
+     * @return JSON data of response
+     */
+    public JSONObject getSupportedFocusMode() throws IOException {
+        String service = "camera";
+        try {
+            JSONObject requestJson = new JSONObject()
+                    .put("method", "getSupportedFocusMode")
+                    .put("params", new JSONArray())
+                    .put("id", id())
+                    .put("version", "1.0");
+            String url = findActionListUrl(service) + "/" + service;
+
+            log("Request:  " + requestJson.toString());
+            String responseJson = SimpleHttpClient.httpPost(url,
+                    requestJson.toString());
+            log("Response: " + responseJson);
+            return new JSONObject(responseJson);
+        } catch (JSONException e) {
+            throw new IOException(e);
+        }
+    }
+
+    /**
      * Calls startLiveview API to the target server. Request JSON data is such
      * like as below.
      * 
