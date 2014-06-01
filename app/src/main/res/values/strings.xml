@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="app_name">Timelapse</string>
+    <string name="action_settings">Settings</string>
+    <string name="msg_search_devices">Connect to compatible camera via Wi-Fi settings before device discovery.</string>
+    <string name="msg_wifi_disconnect">(Wi-Fi disconnected)</string>
+    <string name="button_start_search">Start device discovery</string>
+    <string name="title_activity_timelapse">TimelapseActivity</string>
+    <string name="hello_world">Set Timelapse-Value and press Start Timelapse</string>
+    <string name="button_start_timelapse">Start Timelapse</string>
+    <string name="button_stop_timelapse">Stop Timelapse</string>
+    <string name="label_timelapse_value">Timeout:</string>
+</resources>
