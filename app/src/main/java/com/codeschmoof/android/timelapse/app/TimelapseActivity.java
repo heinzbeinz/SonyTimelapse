@@ -15,6 +15,7 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 
 import com.codeschmoof.android.timelapse.R;
+import com.codeschmoof.android.timelapse.service.ProgressListener;
 import com.codeschmoof.android.timelapse.service.TimelapseService;
 import com.codeschmoof.android.timelapse.util.TimeSpan;
 
@@ -39,7 +40,7 @@ public class TimelapseActivity extends ActionBarActivity {
     protected void onStart() {
         super.onStart();
 
-        // Bind to LocalService
+        // Bind to TimelapseService
         final Intent intent = new Intent(this, TimelapseService.class);
         bindService(intent, connection, Context.BIND_AUTO_CREATE);
     }
@@ -64,15 +65,15 @@ public class TimelapseActivity extends ActionBarActivity {
     protected void onResume() {
         super.onResume();
 
-        currentMode = Mode.START_TIMELAPSE;
-
-        updateTimelapseText();
-        updateTimelapseButton();
+        //updateTimelapseUiState();
+        getTimelapseSeekBar().setEnabled(false);
+        getRepeatsSeekBar().setEnabled(false);
+        getTimelapseButton().setEnabled(false);
 
         getTimelapseSeekBar().setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int i, boolean b) {
-
+                updateTimelapseText();
             }
 
             @Override
@@ -82,9 +83,6 @@ public class TimelapseActivity extends ActionBarActivity {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                if (currentMode == Mode.STOP_TIMELAPSE) {
-                    TimelapseService.startActionUpdateTimelapse(TimelapseActivity.this, seekBar.getProgress());
-                }
                 updateTimelapseText();
             }
         });
@@ -92,7 +90,7 @@ public class TimelapseActivity extends ActionBarActivity {
         getRepeatsSeekBar().setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int i, boolean b) {
-
+                updateTimelapseText();
             }
 
             @Override
@@ -109,19 +107,23 @@ public class TimelapseActivity extends ActionBarActivity {
         getTimelapseButton().setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
+                getTimelapseButton().setEnabled(false);
                 performTimelapseAction();
-
-                currentMode = currentMode.getInverse();
-                updateTimelapseButton();
             }
         });
+
+        if (service != null) {
+            updateAndBindServiceListener();
+        }
     }
 
     @Override
-    protected void onDestroy() {
-        TimelapseService.startActionDisconnect(this);
+    protected void onPause() {
+        super.onPause();
 
-        super.onDestroy();
+        if (service != null) {
+            service.removeListener(progressListener);
+        }
     }
 
     @Override
@@ -144,36 +146,71 @@ public class TimelapseActivity extends ActionBarActivity {
     }
 
     private void updateTimelapseText() {
-        final int period = getTimelapseSeekBar().getProgress();
-        final int repeats = getRepeatsSeekBar().getProgress();
-        final TimeSpan timeLeft = TimeSpan.of(period * repeats, TimeUnit.SECONDS);
-        final String text = String.format("%d s * %d = %s left", period, repeats, timeLeft.toString());
-        getTimelapseTextView().setText(text);
+        try {
+            final int period = getTimelapseSeekBar().getProgress() + 1;
+            final int repeats = getRepeatsSeekBar().getProgress() + 1;
+            final TimeSpan timeLeft = TimeSpan.of(period * repeats, TimeUnit.SECONDS);
+            final String text = String.format("%d s * %d = %s left", period, repeats, timeLeft.toString());
+            getTimelapseTextView().setText(text);
+        } catch (Throwable e) {
+            e.printStackTrace();
+        }
     }
 
-    private void updateTimelapseButton() {
+    private void updateTimelapseUiState() {
         switch (currentMode) {
             case START_TIMELAPSE:
+                getTimelapseButton().setEnabled(true);
                 getTimelapseButton().setText(R.string.button_start_timelapse);
+                getTimelapseSeekBar().setEnabled(true);
+                getRepeatsSeekBar().setEnabled(true);
                 break;
 
             case STOP_TIMELAPSE:
+                getTimelapseButton().setEnabled(true);
                 getTimelapseButton().setText(R.string.button_stop_timelapse);
+                getTimelapseSeekBar().setEnabled(false);
+                getRepeatsSeekBar().setEnabled(false);
                 break;
         }
+
+        updateTimelapseText();
     }
 
     private void performTimelapseAction() {
-        switch (currentMode) {
-            case START_TIMELAPSE:
-                final int value = getTimelapseSeekBar().getProgress();
-                TimelapseService.startActionStartTimelapse(this, value);
-                break;
+        final Mode m = currentMode;
+        final TimelapseService s = service;
+        final int period = getTimelapseSeekBar().getProgress() + 1;
+        final int repeats = getRepeatsSeekBar().getProgress() + 1;
 
-            case STOP_TIMELAPSE:
-                TimelapseService.startActionStopTimelapse(this);
-                break;
-        }
+        final Thread start = new Thread() {
+            @Override
+            public void run() {
+                switch (m) {
+                    case START_TIMELAPSE:
+                        s.startCapture(period, repeats);
+                        break;
+
+                    case STOP_TIMELAPSE:
+                        s.cancelCapture();
+                        break;
+                }
+            }
+        };
+        start.start();
+    }
+
+    private void updateAndBindServiceListener() {
+        currentMode = service.getMode() != TimelapseService.Mode.CAPTURING ? Mode.START_TIMELAPSE : Mode.STOP_TIMELAPSE;
+        getTimelapseSeekBar().setProgress(service.getPeriod() - 1);
+        getRepeatsSeekBar().setProgress(service.getMaxRepeats() - 1);
+        updateTimelapseUiState();
+
+        service.addListener(progressListener);
+    }
+
+    private void unbindServiceListener() {
+        service.removeListener(progressListener);
     }
 
     private Button getTimelapseButton() {
@@ -197,12 +234,65 @@ public class TimelapseActivity extends ActionBarActivity {
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
             final TimelapseService.LocalBinder binder = (TimelapseService.LocalBinder) iBinder;
-            service = binder.getService();
+
+            TimelapseActivity.this.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    service = binder.getService();
+                    updateAndBindServiceListener();
+                }
+            });
         }
 
         @Override
         public void onServiceDisconnected(ComponentName componentName) {
-            service = null;
+            TimelapseActivity.this.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    unbindServiceListener();
+                    service = null;
+                }
+            });
         }
     }
+
+    private final ProgressListener progressListener = new ProgressListener() {
+
+        @Override
+        public void captureStarted(int period, int repeats) {
+            TimelapseActivity.this.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    currentMode = Mode.STOP_TIMELAPSE;
+                    updateTimelapseUiState();
+                }
+            });
+        }
+
+        @Override
+        public void captureCanceled() {
+            TimelapseActivity.this.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    currentMode = Mode.START_TIMELAPSE;
+                    updateTimelapseUiState();
+                }
+            });
+        }
+
+        @Override
+        public void captureFinished() {
+            TimelapseActivity.this.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    currentMode = Mode.START_TIMELAPSE;
+                    updateTimelapseUiState();
+                }
+            });
+        }
+
+        @Override
+        public void pictureTaken(int current, int max) {
+        }
+    };
 }

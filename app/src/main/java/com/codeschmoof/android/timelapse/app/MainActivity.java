@@ -1,16 +1,15 @@
 package com.codeschmoof.android.timelapse.app;
 
-import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
-import android.support.v4.content.LocalBroadcastManager;
-import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
+import android.os.IBinder;
+import android.support.v7.app.ActionBarActivity;
 import android.text.Html;
-import android.text.method.CharacterPickerDialog;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -24,17 +23,41 @@ import android.widget.TextView;
 
 import com.codeschmoof.android.timelapse.R;
 import com.codeschmoof.android.timelapse.api.ServerDevice;
-import com.codeschmoof.android.timelapse.service.DeviceInfo;
+import com.codeschmoof.android.timelapse.api.SimpleSsdpClient;
 import com.codeschmoof.android.timelapse.service.TimelapseService;
-
-import org.json.JSONException;
 
 import java.util.ArrayList;
 import java.util.List;
 
 
 public class MainActivity extends ActionBarActivity {
+    private final SimpleSsdpClient ssdpClient = new SimpleSsdpClient();
+
+    private LocalServiceConnection connection = new LocalServiceConnection();
+    private volatile TimelapseService service = null;
     private DeviceListAdapter deviceListAdapter;
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+
+        // Start TimelapseService (service needs to stay alive even after activity is gone)
+        TimelapseService.startActionStart(this);
+
+        // Bind to TimelapseService
+        final Intent intent = new Intent(this, TimelapseService.class);
+        bindService(intent, connection, Context.BIND_AUTO_CREATE);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+
+        if (service != null) {
+            unbindService(connection);
+            service = null;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -42,9 +65,6 @@ public class MainActivity extends ActionBarActivity {
         setContentView(R.layout.activity_main);
 
         deviceListAdapter = new DeviceListAdapter(this);
-
-        final IntentFilter filter = new IntentFilter(TimelapseService.REPLY_ACTION_SEARCH);
-        LocalBroadcastManager.getInstance(this).registerReceiver(new ServiceReceiver(), filter);
     }
 
     @Override
@@ -57,8 +77,7 @@ public class MainActivity extends ActionBarActivity {
         getSearchButton().setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                TimelapseService.startActionSearch(MainActivity.this);
-                getSearchButton().setEnabled(false);
+                startSearch();
             }
         });
 
@@ -67,7 +86,7 @@ public class MainActivity extends ActionBarActivity {
             public void onItemClick(AdapterView<?> adapterView, View view, int i, long l) {
                 final ListView listView = (ListView) adapterView;
                 final DeviceListAdapter adapter = (DeviceListAdapter) adapterView.getAdapter();
-                final DeviceInfo item = adapter.getItem(i);
+                final ServerDevice item = adapter.getItem(i);
                 connectToDevice(item);
             }
         });
@@ -95,11 +114,55 @@ public class MainActivity extends ActionBarActivity {
         return super.onOptionsItemSelected(item);
     }
 
-    private void connectToDevice(DeviceInfo deviceInfo) {
-        TimelapseService.startActionConnect(this, deviceInfo.getId());
+    private void startSearch() {
+        getSearchButton().setEnabled(false);
 
+        ssdpClient.search(new SimpleSsdpClient.SearchResultHandler() {
+            @Override
+            public void onDeviceFound(final ServerDevice device) {
+                MainActivity.this.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        final DeviceListAdapter adapter = (DeviceListAdapter) getDevicesList().getAdapter();
+                        adapter.addDevice(device);
+                    }
+                });
+            }
+
+            @Override
+            public void onFinished() {
+                MainActivity.this.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        getSearchButton().setEnabled(true);
+                    }
+                });
+            }
+
+            @Override
+            public void onErrorFinished() {
+                MainActivity.this.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        getSearchButton().setEnabled(true);
+                    }
+                });
+            }
+        });
+    }
+
+    private void connectToDevice(final ServerDevice deviceInfo) {
         final Intent openActivity = new Intent(this, TimelapseActivity.class);
-        startActivity(openActivity);
+
+        final Thread start = new Thread() {
+            @Override
+            public void run() {
+                service.setDevice(deviceInfo);
+
+                startActivity(openActivity);
+            }
+        };
+        start.start();
     }
 
     private void updateSSID() {
@@ -110,25 +173,10 @@ public class MainActivity extends ActionBarActivity {
             String htmlLabel = String.format("SSID: <b>%s</b>",
                     wifiInfo.getSSID());
             textWifiSsid.setText(Html.fromHtml(htmlLabel));
-            getSearchButton().setEnabled(true);
+            getSearchButton().setEnabled(!ssdpClient.isSearching());
         } else {
             textWifiSsid.setText(R.string.msg_wifi_disconnect);
             getSearchButton().setEnabled(false);
-        }
-    }
-
-    private void updateDevices(String[] deviceJSONStrings) {
-        final ListView devicesList = getDevicesList();
-        final DeviceListAdapter adapter = (DeviceListAdapter) devicesList.getAdapter();
-        adapter.clearDevices();
-
-        for (String json: deviceJSONStrings) {
-            try {
-                final DeviceInfo info = DeviceInfo.fromJSON(json);
-                adapter.addDevice(info);
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
         }
     }
 
@@ -144,38 +192,18 @@ public class MainActivity extends ActionBarActivity {
         return (ListView) findViewById(R.id.list_device);
     }
 
-    private class ServiceReceiver extends BroadcastReceiver {
-
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            final String action = intent.getAction();
-
-            if (action.equals(TimelapseService.REPLY_ACTION_SEARCH)) {
-                final String[] deviceJSONStrings = intent.getStringArrayExtra(TimelapseService.REPLY_ACTION_SEARCH_DATA_DEVICES);
-
-                MainActivity.this.runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        updateDevices(deviceJSONStrings);
-                        getSearchButton().setEnabled(true);
-                    }
-                });
-            }
-        }
-    }
-
     // Adapter class for DeviceList
     private static class DeviceListAdapter extends BaseAdapter {
 
-        private final List<DeviceInfo> mDeviceList;
+        private final List<ServerDevice> mDeviceList;
         private final LayoutInflater mInflater;
 
         public DeviceListAdapter(Context context) {
-            mDeviceList = new ArrayList<DeviceInfo>();
+            mDeviceList = new ArrayList<ServerDevice>();
             mInflater = LayoutInflater.from(context);
         }
 
-        public void addDevice(DeviceInfo device) {
+        public void addDevice(ServerDevice device) {
             mDeviceList.add(device);
             notifyDataSetChanged();
         }
@@ -191,13 +219,13 @@ public class MainActivity extends ActionBarActivity {
         }
 
         @Override
-        public DeviceInfo getItem(int position) {
+        public ServerDevice getItem(int position) {
             return mDeviceList.get(position);
         }
 
         @Override
         public long getItemId(int position) {
-            return getItem(position).getId();
+            return position; // hacky
         }
 
         @Override
@@ -209,9 +237,9 @@ public class MainActivity extends ActionBarActivity {
                         R.layout.device_list_item, null);
             }
 
-            final DeviceInfo item = getItem(position);
+            final ServerDevice item = getItem(position);
             final String friendlyName = item.getFriendlyName();
-            final String ip = item.getIp();
+            final String ip = item.getIpAddres();
 
             // Label
             String htmlLabel = String.format("%s ", friendlyName)
@@ -221,6 +249,20 @@ public class MainActivity extends ActionBarActivity {
             textView.setText(Html.fromHtml(htmlLabel));
 
             return textView;
+        }
+    }
+
+    private class LocalServiceConnection implements ServiceConnection {
+
+        @Override
+        public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
+            final TimelapseService.LocalBinder binder = (TimelapseService.LocalBinder) iBinder;
+            service = binder.getService();
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName componentName) {
+            service = null;
         }
     }
 }

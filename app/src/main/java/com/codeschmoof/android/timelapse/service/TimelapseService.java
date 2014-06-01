@@ -6,22 +6,15 @@ import android.content.Intent;
 import android.content.Context;
 import android.os.Binder;
 import android.os.IBinder;
-import android.support.v4.content.LocalBroadcastManager;
 import android.util.Log;
 
 import com.codeschmoof.android.timelapse.api.ServerDevice;
 import com.codeschmoof.android.timelapse.api.SimpleRemoteApi;
-import com.codeschmoof.android.timelapse.api.SimpleSsdpClient;
-
-import org.json.JSONException;
-import org.json.JSONObject;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -32,45 +25,25 @@ import java.util.concurrent.TimeUnit;
  * <p/>
  */
 public class TimelapseService extends Service {
+    public enum Mode {
+        STARTED,
+        INITIALIZED,
+        CAPTURING
+    }
     private static final String TAG = TimelapseService.class.getSimpleName();
 
-    public static final String ACTION_SEARCH = "com.codeschmoof.android.timelapse.action.SEARCH";
-
-    public static final String REPLY_ACTION_SEARCH = "com.codeschmoof.android.timelapse.action.REPLY_SEARCH";
-    public static final String REPLY_ACTION_SEARCH_DATA_DEVICES = "com.codeschmoof.android.timelapse.data.REPLY_SEARCH.DEVICES";
-
-    public static final String ACTION_CONNECT = "com.codeschmoof.android.timelapse.action.CONNECT";
-    public static final String ACTION_CONNECT_DATA_DEVICE_ID = "com.codeschmoof.android.timelapse.data.CONNECT.DEVICE_ID";
-
-    public static final String ACTION_DISCONNECT = "com.codeschmoof.android.timelapse.action.DISCONNECT";
-
-    public static final String ACTION_START_TIMELAPSE = "com.codeschmoof.android.timelapse.action.START_TIMELAPSE";
-    public static final String ACTION_START_TIMELAPSE_DATA_PERIOD = "com.codeschmoof.android.timelapse.data.START_TIMELAPSE.PERIOD";
-
-    public static final String ACTION_UPDATE_TIMELAPSE = "com.codeschmoof.android.timelapse.action.UPDATE_TIMELAPSE";
-    public static final String ACTION_UPDATE_TIMELAPSE_DATA_PERIOD = "com.codeschmoof.android.timelapse.data.UPDATE_TIMELAPSE.PERIOD";
-
-    public static final String ACTION_STOP_TIMELAPSE = "com.codeschmoof.android.timelapse.action.STOP_TIMELAPSE";
+    public static final String ACTION_START = "com.codeschmoof.android.timelapse.action.START";
 
     private final LocalBinder binder = new LocalBinder();
-    private final SimpleSsdpClient ssdpClient = new SimpleSsdpClient();
-    private final List<ServerDevice> devices = new ArrayList<ServerDevice>();
+    private final CopyOnWriteArrayList<ProgressListener> listener = new CopyOnWriteArrayList<ProgressListener>();
     private ExecutorService executor = null;
-    private volatile SimpleRemoteApi currentApi = null;
-    private Timer timer = null;
-
-
-    /**
-     * Starts this service to perform action Foo with the given parameters. If
-     * the service is already performing a task this action will be queued.
-     *
-     * @see IntentService
-     */
-    public static void startActionSearch(Context context) {
-        final Intent intent = new Intent(context, TimelapseService.class);
-        intent.setAction(ACTION_SEARCH);
-        context.startService(intent);
-    }
+    private volatile Mode mode = Mode.STARTED;
+    private volatile Timer timer = null;
+    private ServerDevice currentDevice = null;
+    private SimpleRemoteApi currentApi = null;
+    private int period = 10;
+    private int current = 0;
+    private int maxRepeats = 60;
 
     /**
      * Starts this service to perform action Foo with the given parameters. If
@@ -78,81 +51,131 @@ public class TimelapseService extends Service {
      *
      * @see IntentService
      */
-    public static void startActionConnect(Context context, int deviceId) {
+    public static void startActionStart(Context context) {
         final Intent intent = new Intent(context, TimelapseService.class);
-        intent.setAction(ACTION_CONNECT);
-        intent.putExtra(ACTION_CONNECT_DATA_DEVICE_ID, deviceId);
-        context.startService(intent);
-    }
-
-    /**
-     * Starts this service to perform action Foo with the given parameters. If
-     * the service is already performing a task this action will be queued.
-     *
-     * @see IntentService
-     */
-    public static void startActionDisconnect(Context context) {
-        final Intent intent = new Intent(context, TimelapseService.class);
-        intent.setAction(ACTION_DISCONNECT);
-        context.startService(intent);
-    }
-
-    /**
-     * Starts this service to perform action Foo with the given parameters. If
-     * the service is already performing a task this action will be queued.
-     *
-     * @see IntentService
-     */
-    public static void startActionStartTimelapse(Context context, int period) {
-        final Intent intent = new Intent(context, TimelapseService.class);
-        intent.setAction(ACTION_START_TIMELAPSE);
-        intent.putExtra(ACTION_START_TIMELAPSE_DATA_PERIOD, period);
-        context.startService(intent);
-    }
-
-    /**
-     * Starts this service to perform action Foo with the given parameters. If
-     * the service is already performing a task this action will be queued.
-     *
-     * @see IntentService
-     */
-    public static void startActionUpdateTimelapse(Context context, int period) {
-        final Intent intent = new Intent(context, TimelapseService.class);
-        intent.setAction(ACTION_UPDATE_TIMELAPSE);
-        intent.putExtra(ACTION_UPDATE_TIMELAPSE_DATA_PERIOD, period);
-        context.startService(intent);
-    }
-
-    /**
-     * Starts this service to perform action Foo with the given parameters. If
-     * the service is already performing a task this action will be queued.
-     *
-     * @see IntentService
-     */
-    public static void startActionStopTimelapse(Context context) {
-        final Intent intent = new Intent(context, TimelapseService.class);
-        intent.setAction(ACTION_STOP_TIMELAPSE);
+        intent.setAction(ACTION_START);
         context.startService(intent);
     }
 
     public TimelapseService() {
     }
 
+    public Mode getMode() {
+        return mode;
+    }
+
+    public int getPeriod() {
+        return period;
+    }
+
+    public int getMaxRepeats() {
+        return maxRepeats;
+    }
+
+    public void addListener(ProgressListener listener) {
+        this.listener.add(listener);
+    }
+
+    public void removeListener(ProgressListener listener) {
+        this.listener.remove(listener);
+    }
+
+    public synchronized void setDevice(ServerDevice device) {
+        if (device != null) {
+            currentDevice = device;
+            currentApi = new SimpleRemoteApi(currentDevice);
+            try {
+                currentApi.startRecMode();
+                mode = Mode.INITIALIZED;
+            } catch (Throwable e) {
+                Log.e(TAG, e.getMessage(), e);
+            }
+        } else {
+            if (currentApi != null) {
+                try {
+                    currentApi.stopRecMode();
+                } catch (Throwable e) {
+                    Log.e(TAG, e.getMessage(), e);
+                }
+            }
+
+            mode = Mode.STARTED;
+            currentDevice = null;
+            currentApi = null;
+        }
+    }
+
+    public synchronized void startCapture(final int period, int repeats) {
+        if (mode != Mode.INITIALIZED) {
+            return;
+        }
+
+        if (timer != null) {
+            timer.cancel();
+        }
+
+        mode = Mode.CAPTURING;
+        this.period = period;
+        this.maxRepeats = repeats;
+        this.current = 0;
+
+        for (ProgressListener l: listener) {
+            l.captureStarted(period, repeats);
+        }
+
+        timer = new Timer();
+        timer.schedule(new TakePictureTask(), 0);
+    }
+
+    public void cancelCapture() {
+        if (mode != Mode.CAPTURING) {
+            return;
+        }
+
+        stopCapture();
+
+        for (ProgressListener l: listener) {
+            l.captureCanceled();
+        }
+    }
+
+    public synchronized void modifyCapture(int period, int repeats) {
+        this.period = period;
+        this.maxRepeats = repeats;
+        this.current = Math.min(this.current, this.maxRepeats);
+    }
+
+    private synchronized void stopCapture() {
+        if (timer != null) {
+            timer.cancel();
+            timer = null;
+        }
+
+        mode = Mode.INITIALIZED;
+    }
+    
     @Override
     public void onCreate() {
         super.onCreate();
 
         executor = Executors.newSingleThreadExecutor();
         Log.d(TAG, "Service created");
+
+        addListener(new NotificationProgressListener(this));
     }
 
     @Override
     public void onDestroy() {
+        if (timer != null) {
+            timer.cancel();
+            timer = null;
+        }
+
         executor.shutdown();
         try {
             executor.awaitTermination(1, TimeUnit.MINUTES);
         } catch (InterruptedException e) {
-            e.printStackTrace();
+            Log.e(TAG, e.getMessage(), e);
         }
         Log.d(TAG, "Service destroyed");
 
@@ -181,185 +204,53 @@ public class TimelapseService extends Service {
             final String action = intent.getAction();
             Log.d(TAG, "Got " + action);
 
-            if (ACTION_SEARCH.equals(action)) {
-                handleActionSearch();
-            } else if (ACTION_CONNECT.equals(action)) {
-                handleActionConnect(intent.getIntExtra(ACTION_CONNECT_DATA_DEVICE_ID, -1));
-            } else if (ACTION_DISCONNECT.equals(action)) {
-                handleActionDisconnect();
-            } else if (ACTION_START_TIMELAPSE.equals(action)) {
-                handleActionStartTimelapse(intent.getIntExtra(ACTION_START_TIMELAPSE_DATA_PERIOD, -1));
-            } else if (ACTION_UPDATE_TIMELAPSE.equals(action)) {
-                handleActionUpdateTimelapse(intent.getIntExtra(ACTION_UPDATE_TIMELAPSE_DATA_PERIOD, -1));
-            } else if (ACTION_STOP_TIMELAPSE.equals(action)) {
-                handleActionStopTimelapse();
-            }
+            if (ACTION_START.equals(action)) {
+                handleActionStart();
+            } 
         }
     }
 
-    /**
-     * Handle action Foo in the provided background thread with the provided
-     * parameters.
-     */
-    private void handleActionSearch() {
-        final CountDownLatch latch = new CountDownLatch(1);
-
-        devices.clear();
-
-        ssdpClient.search(new SimpleSsdpClient.SearchResultHandler() {
-            @Override
-            public void onDeviceFound(ServerDevice device) {
-                Log.d(TAG, "found device " + device.getFriendlyName());
-
-                devices.add(device);
-            }
-
-            @Override
-            public void onFinished() {
-                latch.countDown();
-            }
-
-            @Override
-            public void onErrorFinished() {
-                latch.countDown();
-            }
-        });
-
-        try {
-            latch.await();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
-
-        final List<JSONObject> devicesJSON = getDevicesJSON();
-        final String[] data = toArray(devicesJSON);
-
-        final Intent reply = new Intent();
-        reply.setAction(REPLY_ACTION_SEARCH);
-        reply.putExtra(REPLY_ACTION_SEARCH_DATA_DEVICES, data);
-        LocalBroadcastManager.getInstance(this).sendBroadcast(reply);
-    }
-
-    private void handleActionConnect(int deviceId) {
-        if (deviceId < 0 || deviceId >= devices.size()) {
-            return;
-        }
-
-        currentApi = new SimpleRemoteApi(devices.get(deviceId));
-        try {
-            currentApi.startRecMode();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        try {
-            JSONObject res = currentApi.setFocusMode("MF");
-            Log.d(TAG, "shoot mode: " + res.toString());
-            final JSONObject apis = currentApi.getAvailableApiList();
-            Log.d(TAG, "APIs: " + apis.toString());
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void handleActionDisconnect() {
-        if (currentApi != null) {
-            try {
-                currentApi.stopRecMode();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-        currentApi = null;
-        reset();
-    }
-
-    private void handleActionStartTimelapse(long period) {
-        if (currentApi == null) {
-            return;
-        }
-
-        reset();
-        timer = new Timer();
-
-        timer.schedule(new TimerTask() {
-            @Override
-            public void run() {
-                takePicture();
-            }
-        }, 0, period * 1000);
-    }
-
-    private void handleActionUpdateTimelapse(long period) {
-        if (currentApi == null || timer == null) {
-            return;
-        }
-
-        reset();
-        timer = new Timer();
-
-        timer.schedule(new TimerTask() {
-            @Override
-            public void run() {
-                takePicture();
-            }
-        }, 0, period * 1000);
-    }
-
-    private void handleActionStopTimelapse() {
-        reset();
+    private void handleActionStart() {
+        // nothing to do...
     }
 
     private void takePicture() {
-        final SimpleRemoteApi api = currentApi;
-
-        if (api == null) {
+        if (current >= maxRepeats) {
             return;
         }
 
+        current++;
+
         try {
-            Log.d(TAG, "taking picture...");
-            final JSONObject ret = api.actTakePicture();
-            Log.d(TAG, "returned " + ret.toString());
+            currentApi.actTakePicture();
         } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void reset() {
-        if (timer != null) {
-            timer.cancel();
-            timer = null;
-        }
-    }
-
-    private List<JSONObject> getDevicesJSON() {
-        final List<JSONObject> ret = new ArrayList<JSONObject>(devices.size());
-
-        for (int i = 0; i < devices.size(); ++i) {
-            try {
-                final DeviceInfo info = DeviceInfo.fromServerDevice(i, devices.get(i));
-                ret.add(info.toJSON());
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
+            Log.e(TAG, e.getMessage(), e);
         }
 
-        return ret;
-    }
-
-    private static String[] toArray(List<JSONObject> objects) {
-        final String[] ret = new String[objects.size()];
-
-        for (int i = 0; i < objects.size(); ++i) {
-            ret[i] = objects.get(i).toString();
+        for (ProgressListener l: listener) {
+            l.pictureTaken(current, maxRepeats);
         }
-
-        return ret;
     }
 
     public class LocalBinder extends Binder {
         public TimelapseService getService() {
             return TimelapseService.this;
+        }
+    }
+
+    private class TakePictureTask extends TimerTask {
+        @Override
+        public void run() {
+            takePicture();
+            if (current < maxRepeats) {
+                timer.schedule(new TakePictureTask(), period * 1000);
+            } else {
+                stopCapture();
+
+                for (ProgressListener l: listener) {
+                    l.captureFinished();
+                }
+            }
         }
     }
 }
