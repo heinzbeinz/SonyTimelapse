@@ -1,19 +1,22 @@
 package com.codeschmoof.android.timelapse.service;
 
+import android.annotation.TargetApi;
+import android.app.AlarmManager;
 import android.app.IntentService;
+import android.app.PendingIntent;
 import android.app.Service;
-import android.content.Intent;
 import android.content.Context;
+import android.content.Intent;
 import android.os.Binder;
+import android.os.Build;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.util.Log;
 
 import com.codeschmoof.android.timelapse.api.ServerDevice;
 import com.codeschmoof.android.timelapse.api.SimpleRemoteApi;
 
 import java.io.IOException;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -33,12 +36,14 @@ public class TimelapseService extends Service {
     private static final String TAG = TimelapseService.class.getSimpleName();
 
     public static final String ACTION_START = "com.codeschmoof.android.timelapse.action.START";
+    public static final String ACTION_CAPTURE = "com.codeschmoof.android.timelapse.action.CAPTURE";
 
     private final LocalBinder binder = new LocalBinder();
     private final CopyOnWriteArrayList<ProgressListener> listener = new CopyOnWriteArrayList<ProgressListener>();
+    private AlarmManager alarmManager = null;
     private ExecutorService executor = null;
+    private PendingIntent alarmIntent = null;
     private volatile Mode mode = Mode.STARTED;
-    private volatile Timer timer = null;
     private ServerDevice currentDevice = null;
     private SimpleRemoteApi currentApi = null;
     private int period = 10;
@@ -105,13 +110,10 @@ public class TimelapseService extends Service {
         }
     }
 
+    @TargetApi(Build.VERSION_CODES.KITKAT)
     public synchronized void startCapture(final int period, int repeats) {
         if (mode != Mode.INITIALIZED) {
             return;
-        }
-
-        if (timer != null) {
-            timer.cancel();
         }
 
         mode = Mode.CAPTURING;
@@ -123,8 +125,7 @@ public class TimelapseService extends Service {
             l.captureStarted(period, repeats);
         }
 
-        timer = new Timer();
-        timer.schedule(new TakePictureTask(), 0);
+        alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, 0, alarmIntent);
     }
 
     public void cancelCapture() {
@@ -146,11 +147,8 @@ public class TimelapseService extends Service {
     }
 
     private synchronized void stopCapture() {
-        if (timer != null) {
-            timer.cancel();
-            timer = null;
-        }
-
+        current = maxRepeats = 0;
+        alarmManager.cancel(alarmIntent);
         mode = Mode.INITIALIZED;
     }
     
@@ -159,18 +157,21 @@ public class TimelapseService extends Service {
         super.onCreate();
 
         executor = Executors.newSingleThreadExecutor();
+        alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        final Intent intent = new Intent(this, getClass());
+        intent.setAction(ACTION_CAPTURE);
+        alarmIntent = PendingIntent.getService(this, 0, intent, 0);
         Log.d(TAG, "Service created");
 
         addListener(new NotificationProgressListener(this));
     }
 
+    @TargetApi(Build.VERSION_CODES.GINGERBREAD)
     @Override
     public void onDestroy() {
-        if (timer != null) {
-            timer.cancel();
-            timer = null;
-        }
-
+        current = maxRepeats = 0;
+        alarmManager.cancel(alarmIntent);
+        alarmManager = null;
         executor.shutdown();
         try {
             executor.awaitTermination(1, TimeUnit.MINUTES);
@@ -206,12 +207,30 @@ public class TimelapseService extends Service {
 
             if (ACTION_START.equals(action)) {
                 handleActionStart();
-            } 
+            } else if (ACTION_CAPTURE.equals(action)) {
+                handleActionCapture();
+            }
         }
     }
 
     private void handleActionStart() {
         // nothing to do...
+    }
+
+    @TargetApi(Build.VERSION_CODES.KITKAT)
+    private void handleActionCapture() {
+        final long nextScheduling = SystemClock.elapsedRealtime() + period * 1000;
+        takePicture();
+        if (current < maxRepeats) {
+            Log.d(TAG, "Current " + current + "/" + maxRepeats);
+            alarmManager.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, nextScheduling, alarmIntent);
+        } else {
+            stopCapture();
+
+            for (ProgressListener l: listener) {
+                l.captureFinished();
+            }
+        }
     }
 
     private void takePicture() {
@@ -235,22 +254,6 @@ public class TimelapseService extends Service {
     public class LocalBinder extends Binder {
         public TimelapseService getService() {
             return TimelapseService.this;
-        }
-    }
-
-    private class TakePictureTask extends TimerTask {
-        @Override
-        public void run() {
-            takePicture();
-            if (current < maxRepeats) {
-                timer.schedule(new TakePictureTask(), period * 1000);
-            } else {
-                stopCapture();
-
-                for (ProgressListener l: listener) {
-                    l.captureFinished();
-                }
-            }
         }
     }
 }
